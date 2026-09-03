@@ -34,7 +34,10 @@ interface JobSettings {
   saveConversionLog: boolean;
 }
 
-const API_BASE = import.meta.env.BASE_URL.replace(/\/$/, '');
+// Full backend origin (e.g. https://api.yourdomain.com) for independent deploys.
+// Falls back to same-origin (BASE_URL) when unset, e.g. local dev via Vite proxy
+// or when the backend still serves the built frontend itself.
+const API_BASE = (import.meta.env.VITE_API_BASE_URL ?? import.meta.env.BASE_URL).replace(/\/$/, '');
 
 function App() {
   // Theme State

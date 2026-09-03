@@ -1,0 +1,17 @@
+# Python
+__pycache__/
+*.pyc
+.venv/
+
+# Node / frontend build
+frontend/node_modules/
+frontend/dist/
+
+# Runtime data (backend generates these at request time)
+backend/uploads/*
+backend/output/*
+!backend/uploads/.gitkeep
+!backend/output/.gitkeep
+
+# Editor / OS
+.DS_Store

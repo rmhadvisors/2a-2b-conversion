@@ -635,10 +635,18 @@ async def download_file(job_id: str, file_type: str):
         
     return FileResponse(filepath, media_type=media_type, filename=filename)
 
-# Serve built frontend static files if they exist
+# Optional: serve a built frontend if one is found alongside this backend.
+# Not used in the standard split-deploy setup (frontend on Vercel, this API
+# on Hostinger) but kept for local/combined runs. Checks both a "frontend"
+# folder colocated with this file (legacy layout) and the sibling
+# "../frontend/dist" produced by the monorepo's frontend/ package.
 from fastapi.staticfiles import StaticFiles
-frontend_dist = os.path.abspath(os.path.join("frontend", "dist"))
-if os.path.exists(frontend_dist):
+_candidate_dists = [
+    os.path.abspath(os.path.join("frontend", "dist")),
+    os.path.abspath(os.path.join(os.path.dirname(__file__), "..", "frontend", "dist")),
+]
+frontend_dist = next((p for p in _candidate_dists if os.path.exists(p)), None)
+if frontend_dist:
     app.mount("/", StaticFiles(directory=frontend_dist, html=True), name="frontend")
 
 if __name__ == "__main__":
