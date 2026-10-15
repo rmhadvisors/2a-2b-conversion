@@ -39,6 +39,7 @@ interface JobSettings {
 // or when the backend still serves the built frontend itself.
 const API_BASE = (import.meta.env.VITE_API_BASE_URL ?? import.meta.env.BASE_URL).replace(/\/$/, '');
 
+
 function App() {
   // Theme State
   const [darkMode, setDarkMode] = useState(() => {
