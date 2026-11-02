@@ -2,7 +2,7 @@ import os
 import sys
 import logging
 from converter.parser import parse_gstr2a_b2b
-from lookup.gst_lookup import lookup_gstin_batch
+from lookup.gst_lookup import lookup_gstin_batch, gstins_needing_lookup
 from converter.validator import validate_records
 from converter.mapper import map_records
 from converter.exporter import export_to_excel
@@ -71,8 +71,9 @@ def main():
         
     # 4. Extract unique GSTINs and lookup legal names
     logger.info("Step 2: Resolving supplier names from GSTINs...")
-    unique_gstins = list(set([r["gstin"] for r in records if r["gstin"]]))
-    logger.info(f"Identified {len(unique_gstins)} unique GSTINs in data.")
+    # Names printed in the input file take priority; only look up the rest.
+    unique_gstins = gstins_needing_lookup(records)
+    logger.info(f"{len(unique_gstins)} GSTINs have no supplier name in the input and need lookup.")
     
     # Run lookup (checks cache first, hits GSTzen for misses)
     gst_names_cache = {}
@@ -83,10 +84,11 @@ def main():
         
     # 5. Validate records
     logger.info("Step 3: Validating records against business rules...")
-    valid_records, validation_errors = validate_records(records, gst_names_cache)
+    name_warnings = []
+    valid_records, validation_errors = validate_records(records, gst_names_cache, name_warnings)
     
-    # Combine errors
-    all_errors = parsing_errors + validation_errors
+    # Combine errors (warnings don't exclude invoices)
+    all_errors = parsing_errors + validation_errors + name_warnings
     
     # 6. Map valid records to Tally columns
     logger.info("Step 4: Mapping valid records to Tally columns...")

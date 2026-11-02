@@ -38,6 +38,40 @@ def is_valid_gstin(gstin):
         return False
     return bool(GSTIN_REGEX.match(gstin.strip().upper()))
 
+def normalize_party_name(name):
+    """Collapse whitespace and treat blank/NaN-like placeholders as empty."""
+    if name is None:
+        return ""
+    cleaned = " ".join(str(name).split())
+    if cleaned.lower() in ("nan", "none", "null", "-", "--", "n/a", "na"):
+        return ""
+    return cleaned
+
+def source_names_by_gstin(records):
+    """
+    Map each GSTIN to the supplier name printed in the GSTR file itself
+    (the first non-empty 'Trade/Legal name of the Supplier' seen for it).
+    """
+    names = {}
+    for rec in records:
+        gstin = (rec.get("gstin") or "").strip().upper()
+        name = normalize_party_name(rec.get("supplier_name_2a"))
+        if gstin and name and gstin not in names:
+            names[gstin] = name
+    return names
+
+def gstins_needing_lookup(records):
+    """
+    GSTINs that have a valid format but no supplier name in the source file,
+    i.e. the only ones worth sending to the cache / GSTzen.
+    """
+    source_names = source_names_by_gstin(records)
+    needed = []
+    for gstin in dict.fromkeys(r["gstin"] for r in records if r.get("gstin")):
+        if is_valid_gstin(gstin) and gstin.strip().upper() not in source_names:
+            needed.append(gstin)
+    return needed
+
 ACRONYMS = {
     "HDFC", "ICICI", "SBI", "IDBI", "HSBC", "PNB", "IIFL", "IRN", "GST", "GSTIN",
     "ONGC", "LLP", "PVT", "LTD", "LLC", "INC", "PLC",

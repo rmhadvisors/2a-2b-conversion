@@ -7,7 +7,7 @@ from openpyxl.styles import Font, PatternFill
 
 logger = logging.getLogger("converter.exporter")
 
-WARNING_KEYWORDS = ("inter-state transaction",)
+WARNING_KEYWORDS = ("inter-state transaction", "party name could not be resolved")
 
 RED_FILL = PatternFill(start_color="FFC7CE", end_color="FFC7CE", fill_type="solid")
 YELLOW_FILL = PatternFill(start_color="FFEB9C", end_color="FFEB9C", fill_type="solid")
@@ -25,6 +25,7 @@ SUGGESTED_FIXES = {
     "duplicate invoice detected": "Check the source file for a duplicated row and remove it if erroneous.",
     "does not match expected": "Recheck CGST/SGST against the taxable value and rate for calculation errors.",
     "inter-state transaction": "Tally template has no IGST columns; this row was skipped from Sheet2.",
+    "party name could not be resolved": "Invoice was converted under a fallback name; rename the ledger in Tally or fix the supplier name in the source file.",
     "gstin lookup failed": "Verify the GSTIN is registered and retry the lookup.",
 }
 

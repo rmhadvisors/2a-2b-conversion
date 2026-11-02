@@ -76,3 +76,22 @@ def reconcile(file_path, records, valid_records, errors, sheet_name="B2B"):
         )
 
     return summary, unaccounted
+
+
+def reconcile_records(records, valid_records, errors):
+    """
+    Row-level check: every parsed source row must be either in valid_records or
+    referenced by an error entry (by Excel row number). Returns the sorted list of
+    row numbers that are in neither - should always be empty.
+    """
+    valid_rows = {r["excel_row_num"] for r in valid_records}
+    error_rows = {e["row"] for e in errors if isinstance(e.get("row"), int)}
+    missing = sorted({r["excel_row_num"] for r in records} - valid_rows - error_rows)
+    if missing:
+        logger.error(f"RECONCILIATION FAILURE: source rows {missing} are neither converted nor in Errors.")
+    else:
+        logger.info(
+            f"Row reconciliation OK: {len(records)} source rows -> {len(valid_rows)} converted, "
+            f"{len(error_rows - valid_rows)} errored, 0 unaccounted."
+        )
+    return missing

@@ -14,9 +14,10 @@ from fastapi.responses import FileResponse
 # Import existing converter modules
 from converter.parser import parse_gstr2a_b2b
 from converter.parser_2b import parse_gstr2b_b2b
-from lookup.gst_lookup import lookup_gstin_batch, load_cache, is_valid_gstin
-from converter.validator import validate_records
+from lookup.gst_lookup import lookup_gstin_batch, load_cache, is_valid_gstin, gstins_needing_lookup, source_names_by_gstin
+from converter.validator import validate_records, resolve_party_name
 from converter.mapper import map_records
+from converter.reconciliation import reconcile_records
 from converter.exporter import export_to_excel
 
 # Initialize FastAPI
@@ -110,16 +111,21 @@ def convert_single_file(
         raise ValueError(f"No records could be extracted from GSTR-{file_type.upper()} B2B sheet.")
 
     # 2. Extract GSTINs and Lookup Legal Names
-    unique_gstins = list(set([r["gstin"] for r in records if r["gstin"]]))
-    stats["total_unique_gstins"] = len(unique_gstins)
+    # The supplier name printed in the GSTR file takes priority, so only GSTINs
+    # without one need the cache / GSTzen.
+    all_gstins = list(set([r["gstin"] for r in records if r["gstin"]]))
+    stats["total_unique_gstins"] = len(all_gstins)
+    unique_gstins = gstins_needing_lookup(records)
+    logger.info(
+        f"[{file_type.upper()}] {len(all_gstins) - len(unique_gstins)} of {len(all_gstins)} GSTINs "
+        f"already have a supplier name in the input file."
+    )
     
     # Determine cache hits & misses
     current_cache = load_cache()
     cache_hits = 0
     cache_misses = 0
     for gstin in unique_gstins:
-        if not is_valid_gstin(gstin):
-            continue
         if gstin in current_cache:
             cache_hits += 1
         else:
@@ -139,30 +145,36 @@ def convert_single_file(
             if gstin in current_cache:
                 gst_names_cache[gstin] = current_cache[gstin]
             else:
-                # Find first GSTR record to get GSTR-2A supplier name fallback
-                matching = next((r for r in records if r["gstin"] == gstin), None)
-                gst_names_cache[gstin] = matching.get("supplier_name_2a", "Unknown Supplier") if matching else "Unknown Supplier"
+                logger.info(f"[{file_type.upper()}] Lookup disabled and no cached name for {gstin}; fallback name will be used.")
         stats["lookups_completed"] = len(gst_names_cache)
 
     # 3. Validation Check
     logger.info(f"[{file_type.upper()}] Validating invoices against accounting rules...")
-    valid_records, validation_errors = validate_records(records, gst_names_cache)
+    name_warnings: List[Dict[str, Any]] = []
+    valid_records, validation_errors = validate_records(records, gst_names_cache, name_warnings)
     
     if not settings.get("enableValidation", True):
         logger.warning(f"[{file_type.upper()}] Validation filter disabled. Mapping all rows.")
         valid_records = records
+        source_names = source_names_by_gstin(records)
         for r in valid_records:
             if "party_name" not in r:
-                r["party_name"] = gst_names_cache.get(r["gstin"], r.get("supplier_name_2a", "Unknown Supplier"))
+                r["party_name"], _ = resolve_party_name(r, source_names, gst_names_cache)
         validation_errors = []
         
     all_errors = parsing_errors + validation_errors
+    # Warnings (e.g. fallback party names) don't exclude an invoice, so they're
+    # reported alongside the errors but kept out of the error counts below.
+    reported_issues = all_errors + name_warnings
     stats["valid_invoices"] = len(valid_records)
     stats["invalid_invoices"] = len(validation_errors)
     stats["validation_errors_count"] = len(all_errors)
     stats["lookup_failures_count"] = sum(
         1 for err in all_errors if "lookup failed" in err.get("error", "").lower()
     )
+
+    if reconcile_records(records, valid_records, all_errors):
+        logger.error(f"[{file_type.upper()}] Some source rows were not accounted for; see log above.")
 
     # 4. Map to Tally Columns
     logger.info(f"[{file_type.upper()}] Mapping {len(valid_records)} validated transactions to Tally format...")
@@ -193,17 +205,17 @@ def convert_single_file(
         output_path = os.path.join(OUTPUT_DIR, output_filename)
         
     logger.info(f"[{file_type.upper()}] Generating final Tally workbook at: {output_filename}...")
-    errors_to_export = all_errors if settings.get("enableErrorSheet", True) else []
+    errors_to_export = reported_issues if settings.get("enableErrorSheet", True) else []
     export_to_excel(mapped_rows, errors_to_export, template_path, output_path)
 
     # Create Error Report JSON for standalone download
     error_report_filename = f"ErrorReport_{file_type.upper()}_{job_id}.json"
     error_report_path = os.path.join(OUTPUT_DIR, error_report_filename)
     with open(error_report_path, "w", encoding="utf-8") as ef:
-        json.dump(all_errors, ef, indent=4)
+        json.dump(reported_issues, ef, indent=4)
         
     logger.info(f"[{file_type.upper()}] Successfully compiled.")
-    return stats, all_errors, output_filename, error_report_filename
+    return stats, reported_issues, output_filename, error_report_filename
 
 def run_conversion_pipeline_multi(
     job_id: str,
