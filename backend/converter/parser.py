@@ -69,10 +69,23 @@ def parse_gstr2a_b2b(file_path):
         
         # If both are empty, it's a blank row
         if pd.isna(gstin_raw) and pd.isna(inv_num_raw):
+            # Not a blank row (checked above): data exists but identifiers are missing.
+            # Report it instead of silently dropping it.
+            if not any(isinstance(v, str) and v.strip() for v in row.tolist()):
+                logger.info(f"Skipping numeric-only summary row {excel_row_num}")
+                continue
+            name_raw = row.get(1)
+            parsing_errors.append({
+                "row": excel_row_num,
+                "invoice": "BLANK",
+                "gstin": "BLANK",
+                "party_name": str(name_raw).strip() if pd.notna(name_raw) else "",
+                "error": "GSTIN and Invoice Number are both blank but the row contains other data; row not converted",
+            })
             continue
             
         # Clean values
-        gstin = str(gstin_raw).strip() if pd.notna(gstin_raw) else ""
+        gstin = str(gstin_raw).strip().upper() if pd.notna(gstin_raw) else ""
         inv_num = str(inv_num_raw).strip() if pd.notna(inv_num_raw) else ""
         
         # Skip GSTR-2A portal generated total summary rows

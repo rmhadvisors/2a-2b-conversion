@@ -39,7 +39,7 @@ def resolve_party_name(rec, source_names, gst_names_cache):
         return name, "lookup"
     return fallback_party_name(gstin), "fallback"
 
-def validate_records(records, gst_names_cache, warnings=None):
+def validate_records(records, gst_names_cache, warnings=None, lookup_failures=None):
     """
     Validates a list of parsed records.
     Returns:
@@ -51,6 +51,7 @@ def validate_records(records, gst_names_cache, warnings=None):
     """
     valid_records = []
     errors = []
+    lookup_failures = lookup_failures or {}
     source_names = source_names_by_gstin(records)
     duplicate_keys = find_duplicate_invoices(records)
 
@@ -60,6 +61,10 @@ def validate_records(records, gst_names_cache, warnings=None):
         gstin = rec["gstin"]
         
         row_errors = []
+        # Best-known party name, kept for the Errors sheet (never blank out a valid name)
+        known_name = (normalize_party_name(rec.get("supplier_name_2a"))
+                      or source_names.get((gstin or "").strip().upper(), "")
+                      or normalize_party_name(gst_names_cache.get(gstin) or gst_names_cache.get((gstin or "").strip().upper())))
         
         # 1. Validate GSTIN
         if not gstin:
@@ -132,11 +137,14 @@ def validate_records(records, gst_names_cache, warnings=None):
             rec["party_name"] = party_name
             rec["party_name_source"] = name_source
             if name_source == "fallback" and warnings is not None:
+                reason = lookup_failures.get(gstin.strip().upper())
+                detail = f" Lookup failure: {reason}." if reason else ""
                 warnings.append({
                     "row": row_num,
                     "invoice": inv_num if inv_num else "BLANK",
                     "gstin": gstin,
-                    "error": f"Party name could not be resolved from the input file, cache or GSTzen; using fallback '{party_name}'"
+                    "party_name": "",
+                    "error": f"Party name could not be resolved from the input file, cache or GSTzen; using fallback '{party_name}'.{detail}"
                 })
 
         # Handle validation output
@@ -147,6 +155,7 @@ def validate_records(records, gst_names_cache, warnings=None):
                 "row": row_num,
                 "invoice": inv_num if inv_num else "BLANK",
                 "gstin": gstin if gstin else "BLANK",
+                "party_name": known_name,
                 "error": error_desc
             })
         else:

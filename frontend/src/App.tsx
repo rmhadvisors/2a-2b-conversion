@@ -500,8 +500,8 @@ function App() {
               {/* Progress Stage Tracker (Visual checklist) */}
               <div className="relative pl-6 space-y-4 border-l border-slate-200 dark:border-slate-800 ml-3">
                 {STAGES.map((stageName, index) => {
-                  const isDone = index < activeStageIndex;
-                  const isCurrent = index === activeStageIndex && jobStatus.status !== 'failed';
+                  const isDone = index < activeStageIndex || (jobStatus.status === 'completed' && index === activeStageIndex);
+                  const isCurrent = index === activeStageIndex && jobStatus.status !== 'failed' && jobStatus.status !== 'completed';
                   const isFailed = index === activeStageIndex && jobStatus.status === 'failed';
                   
                   let iconColor = 'bg-slate-200 text-slate-405 dark:bg-slate-800 dark:text-slate-600';

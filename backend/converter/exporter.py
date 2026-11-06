@@ -7,6 +7,8 @@ from openpyxl.styles import Font, PatternFill
 
 logger = logging.getLogger("converter.exporter")
 
+OUTPUT_SHEET_NAME = "Sheet1"
+
 WARNING_KEYWORDS = ("inter-state transaction", "party name could not be resolved")
 
 RED_FILL = PatternFill(start_color="FFC7CE", end_color="FFC7CE", fill_type="solid")
@@ -24,7 +26,7 @@ SUGGESTED_FIXES = {
     "taxable value is negative": "Confirm whether this is a valid credit note; otherwise correct the value.",
     "duplicate invoice detected": "Check the source file for a duplicated row and remove it if erroneous.",
     "does not match expected": "Recheck CGST/SGST against the taxable value and rate for calculation errors.",
-    "inter-state transaction": "Tally template has no IGST columns; this row was skipped from Sheet2.",
+    "inter-state transaction": "Tally template has no IGST columns; this row was skipped from Sheet1.",
     "party name could not be resolved": "Invoice was converted under a fallback name; rename the ledger in Tally or fix the supplier name in the source file.",
     "gstin lookup failed": "Verify the GSTIN is registered and retry the lookup.",
 }
@@ -46,7 +48,7 @@ def suggest_fix(error_text):
 
 def export_to_excel(mapped_rows, errors, template_path, output_path):
     """
-    Copies the Tally import template to output path, overwrites Sheet2 with converted transactions,
+    Copies the Tally import template to output path, overwrites the template's Sheet2 (renamed Sheet1) with converted transactions,
     and adds an 'Errors' sheet listing any records that failed validation.
     Preserves all template formatting, fonts, and properties.
     """
@@ -65,6 +67,13 @@ def export_to_excel(mapped_rows, errors, template_path, output_path):
         raise ValueError("Target worksheet 'Sheet2' not found in Tally template.")
         
     ws = wb["Sheet2"]
+
+    # The template ships with an unused 'Sheet1'; drop it so only the output and Errors sheets remain.
+    for extra in [n for n in wb.sheetnames if n not in ("Sheet2", "Errors")]:
+        logger.info(f"Removing unused template sheet '{extra}'.")
+        del wb[extra]
+    # The conversion output sheet is presented as 'Sheet1'.
+    ws.title = OUTPUT_SHEET_NAME
 
     # Add "Purchase IGST @ Rate" / "Input IGST @ Rate" header columns per rate slab.
     # These reuse blank template columns (22-29), styled to match the existing
@@ -125,11 +134,11 @@ def export_to_excel(mapped_rows, errors, template_path, output_path):
     # Clear existing data rows (from row 2 onwards)
     max_row = ws.max_row
     if max_row >= 2:
-        logger.info(f"Clearing {max_row - 1} sample data rows from Sheet2...")
+        logger.info(f"Clearing {max_row - 1} sample data rows from Sheet1...")
         ws.delete_rows(2, max_row - 1)
         
     # Write mapped transaction rows and apply styling
-    logger.info(f"Writing {len(mapped_rows)} mapped rows to Sheet2...")
+    logger.info(f"Writing {len(mapped_rows)} mapped rows to Sheet1...")
     for r_idx, row_data in enumerate(mapped_rows, start=2):
         for c_idx, val in enumerate(row_data, start=1):
             cell = ws.cell(row=r_idx, column=c_idx, value=val)
@@ -161,7 +170,7 @@ def export_to_excel(mapped_rows, errors, template_path, output_path):
     normal_font = Font(name="Aptos Narrow", size=11)
     
     # Write headers for Errors worksheet
-    headers = ["Row Number", "Invoice Number", "GSTIN", "Issue", "Severity", "Suggested Fix"]
+    headers = ["Row Number", "Invoice Number", "GSTIN", "Party Name", "Issue", "Severity", "Suggested Fix"]
     ws_err.append(headers)
     for col_idx in range(1, len(headers) + 1):
         ws_err.cell(row=1, column=col_idx).font = bold_font
@@ -176,11 +185,12 @@ def export_to_excel(mapped_rows, errors, template_path, output_path):
             ws_err.cell(row=r_idx, column=1, value=err["row"]).font = normal_font
             ws_err.cell(row=r_idx, column=2, value=err["invoice"]).font = normal_font
             ws_err.cell(row=r_idx, column=3, value=err["gstin"]).font = normal_font
-            ws_err.cell(row=r_idx, column=4, value=err["error"]).font = normal_font
-            severity_cell = ws_err.cell(row=r_idx, column=5, value=severity)
+            ws_err.cell(row=r_idx, column=4, value=err.get("party_name", "")).font = normal_font
+            ws_err.cell(row=r_idx, column=5, value=err["error"]).font = normal_font
+            severity_cell = ws_err.cell(row=r_idx, column=6, value=severity)
             severity_cell.font = normal_font
             severity_cell.fill = fill
-            ws_err.cell(row=r_idx, column=6, value=fix).font = normal_font
+            ws_err.cell(row=r_idx, column=7, value=fix).font = normal_font
 
         # Automatically set column widths for Errors sheet
         for col in ws_err.columns:
@@ -193,6 +203,28 @@ def export_to_excel(mapped_rows, errors, template_path, output_path):
     # Save the workbook
     wb.save(output_path)
     logger.info(f"Output workbook successfully saved to {output_path}")
+    verify_output_workbook(output_path, len(mapped_rows), len(errors or []))
+
+
+def verify_output_workbook(output_path, expected_data_rows, expected_error_rows):
+    """
+    Re-opens the saved workbook and checks it: only the output and Errors sheets exist,
+    and the row counts match what was meant to be written. Raises ValueError on mismatch.
+    """
+    wb = openpyxl.load_workbook(output_path, read_only=True)
+    try:
+        if wb.sheetnames != [OUTPUT_SHEET_NAME, "Errors"]:
+            raise ValueError(f"Unexpected sheets in output workbook: {wb.sheetnames}")
+        data_rows = sum(1 for r in wb[OUTPUT_SHEET_NAME].iter_rows(min_row=2, values_only=True) if any(v is not None for v in r))
+        err_rows = sum(1 for r in wb["Errors"].iter_rows(min_row=2, values_only=True) if any(v is not None for v in r))
+    finally:
+        wb.close()
+    if data_rows != expected_data_rows or err_rows != expected_error_rows:
+        raise ValueError(
+            f"Output verification failed: Sheet1 has {data_rows} rows (expected {expected_data_rows}), "
+            f"Errors has {err_rows} rows (expected {expected_error_rows})."
+        )
+    logger.info(f"Output verified: sheets {['Sheet2', 'Errors']}, {data_rows} converted rows, {err_rows} error rows.")
 
 if __name__ == "__main__":
     # Test exporter

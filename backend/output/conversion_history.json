@@ -1,5 +1,75 @@
 [
     {
+        "job_id": "e47a4616-7b2d-45c2-9d46-83cf03757280",
+        "date": "2026-11-06 13:25:26",
+        "type": "2A",
+        "input_file": "input_2a_e47a4616-7b2d-45c2-9d46-83cf03757280.xlsx",
+        "output_file_2a": "Purchase_Import_Output.xlsx",
+        "output_file_2b": null,
+        "log_file": "ConversionLog_e47a4616-7b2d-45c2-9d46-83cf03757280.log",
+        "error_report_file_2a": "ErrorReport_2A_e47a4616-7b2d-45c2-9d46-83cf03757280.json",
+        "error_report_file_2b": null,
+        "processing_time": "3.05s",
+        "status": "completed",
+        "stats_2a": {
+            "invoices_processed": 116,
+            "lookups_completed": 0,
+            "cache_hits": 0,
+            "cache_misses": 0,
+            "valid_invoices": 116,
+            "invalid_invoices": 0,
+            "total_unique_gstins": 34,
+            "validation_errors_count": 0,
+            "lookup_failures_count": 0
+        },
+        "stats_2b": {
+            "invoices_processed": 0,
+            "lookups_completed": 0,
+            "cache_hits": 0,
+            "cache_misses": 0,
+            "valid_invoices": 0,
+            "invalid_invoices": 0,
+            "total_unique_gstins": 0,
+            "validation_errors_count": 0,
+            "lookup_failures_count": 0
+        }
+    },
+    {
+        "job_id": "9af5da9a-a1ab-4907-86df-17fc148c7002",
+        "date": "2026-11-06 13:21:45",
+        "type": "2A",
+        "input_file": "input_2a_9af5da9a-a1ab-4907-86df-17fc148c7002.xlsx",
+        "output_file_2a": "Purchase_Import_Output.xlsx",
+        "output_file_2b": null,
+        "log_file": "ConversionLog_9af5da9a-a1ab-4907-86df-17fc148c7002.log",
+        "error_report_file_2a": "ErrorReport_2A_9af5da9a-a1ab-4907-86df-17fc148c7002.json",
+        "error_report_file_2b": null,
+        "processing_time": "4.38s",
+        "status": "completed",
+        "stats_2a": {
+            "invoices_processed": 116,
+            "lookups_completed": 0,
+            "cache_hits": 0,
+            "cache_misses": 0,
+            "valid_invoices": 116,
+            "invalid_invoices": 0,
+            "total_unique_gstins": 34,
+            "validation_errors_count": 0,
+            "lookup_failures_count": 0
+        },
+        "stats_2b": {
+            "invoices_processed": 0,
+            "lookups_completed": 0,
+            "cache_hits": 0,
+            "cache_misses": 0,
+            "valid_invoices": 0,
+            "invalid_invoices": 0,
+            "total_unique_gstins": 0,
+            "validation_errors_count": 0,
+            "lookup_failures_count": 0
+        }
+    },
+    {
         "job_id": "90048c37-0da6-44c8-b557-03489a06849c",
         "date": "2026-11-05 10:58:28",
         "type": "2B",

@@ -1,3 +1,4 @@
+import re
 import pandas as pd
 import logging
 from datetime import datetime
@@ -27,18 +28,33 @@ COLUMN_KEYWORDS = {
 }
 
 
+GSTIN_LIKE = re.compile(r"^[0-9]{2}[A-Z0-9]{13}$")
+
+
+def _first_gstin_row(df, max_scan=15):
+    """Index of the first row (within the first `max_scan`) holding a GSTIN-shaped value in any cell."""
+    for row_idx in range(min(max_scan, len(df))):
+        for val in df.iloc[row_idx].tolist():
+            if pd.notna(val) and GSTIN_LIKE.match(str(val).strip().upper()):
+                return row_idx
+    return None
+
+
 def _find_header_columns(df):
     """
-    GSTR-2B headers are split across two merged rows. Scan the first ~10 rows and
-    combine text across them to build a column-name -> column-index map.
+    GSTR-2B headers are split across two merged rows. Combine text of the header rows
+    (everything above the first GSTIN-shaped data row) to build a column-name -> index map.
+    Data rows must never be treated as header text, and data must never be treated as header,
+    otherwise real invoices are silently skipped.
     Returns (column_map, data_start_row_index).
     """
-    max_scan_rows = min(10, len(df))
+    first_data = _first_gstin_row(df)
+    header_rows = first_data if first_data is not None else min(10, len(df))
     combined_header = {}
 
     for col_idx in range(df.shape[1]):
         parts = []
-        for row_idx in range(max_scan_rows):
+        for row_idx in range(header_rows):
             val = df.iat[row_idx, col_idx]
             if pd.notna(val):
                 parts.append(str(val).strip())
@@ -51,11 +67,14 @@ def _find_header_columns(df):
                 column_map[field] = col_idx
                 break
 
-    # Data starts at the first row where the "gstin" column contains a plausible GSTIN-like value.
-    data_start_row = max_scan_rows
+    if first_data is not None:
+        return column_map, first_data
+
+    # Fallback: first row after the header block with a plausible (>=15 char) GSTIN value.
+    data_start_row = header_rows
     gstin_col = column_map.get("gstin")
     if gstin_col is not None:
-        for row_idx in range(max_scan_rows, len(df)):
+        for row_idx in range(header_rows, len(df)):
             val = df.iat[row_idx, gstin_col]
             if pd.notna(val) and len(str(val).strip()) >= 15:
                 data_start_row = row_idx
@@ -141,6 +160,22 @@ def parse_gstr2b_b2b(file_path):
 
     logger.info(f"Resolved column map: {column_map}. Data starts at row index {data_start_row}.")
 
+    # Rows after the header block but before the detected data start must not vanish silently
+    # (e.g. a record whose GSTIN is shorter than 15 characters).
+    for idx in range(min(10, len(df)), data_start_row):
+        row = df.iloc[idx]
+        if row.isna().all():
+            continue
+        g = row.iat[column_map["gstin"]]
+        i = row.iat[column_map["invoice_num"]]
+        parsing_errors.append({
+            "row": idx + 1,
+            "invoice": str(i).strip() if pd.notna(i) else "BLANK",
+            "gstin": str(g).strip().upper() if pd.notna(g) else "BLANK",
+            "party_name": "",
+            "error": "Row appears before the detected data start (GSTIN missing or shorter than 15 characters); row not converted",
+        })
+
     for idx in range(data_start_row, len(df)):
         row = df.iloc[idx]
         excel_row_num = idx + 1
@@ -157,11 +192,22 @@ def parse_gstr2b_b2b(file_path):
 
         gstin_raw = get("gstin")
         inv_num_raw = get("invoice_num")
-        if pd.isna(gstin_raw) if gstin_raw is not None else True:
-            if pd.isna(inv_num_raw) if inv_num_raw is not None else True:
+        if gstin_raw is None and inv_num_raw is None:
+            # Row has data elsewhere (not all-NaN) but no identifiers: report, don't drop,
+            # unless it is a numeric-only totals row.
+            if not any(isinstance(v, str) and v.strip() for v in row.tolist()):
+                logger.info(f"Skipping numeric-only summary row {excel_row_num}")
                 continue
+            parsing_errors.append({
+                "row": excel_row_num,
+                "invoice": "BLANK",
+                "gstin": "BLANK",
+                "party_name": str(get("trade_name", "")).strip(),
+                "error": "GSTIN and Invoice Number are both blank but the row contains other data; row not converted",
+            })
+            continue
 
-        gstin = str(gstin_raw).strip() if gstin_raw is not None else ""
+        gstin = str(gstin_raw).strip().upper() if gstin_raw is not None else ""
         inv_num = str(inv_num_raw).strip() if inv_num_raw is not None else ""
 
         if inv_num.lower().endswith("-total") or inv_num.lower() in ("total", "grand total", "summary"):

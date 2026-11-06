@@ -135,9 +135,10 @@ def convert_single_file(
     stats["cache_misses"] = cache_misses
     
     gst_names_cache = {}
+    lookup_failures: Dict[str, str] = {}
     if settings.get("enableLookup", True):
         logger.info(f"[{file_type.upper()}] Resolving {len(unique_gstins)} GSTINs. Cache hits: {cache_hits}, Misses: {cache_misses}")
-        gst_names_cache = lookup_gstin_batch(unique_gstins)
+        gst_names_cache = lookup_gstin_batch(unique_gstins, failures=lookup_failures)
         stats["lookups_completed"] = len(gst_names_cache)
     else:
         logger.info(f"[{file_type.upper()}] Lookup disabled. Mapping only from local cache and record fallbacks.")
@@ -146,12 +147,13 @@ def convert_single_file(
                 gst_names_cache[gstin] = current_cache[gstin]
             else:
                 logger.info(f"[{file_type.upper()}] Lookup disabled and no cached name for {gstin}; fallback name will be used.")
+                lookup_failures[gstin.strip().upper()] = "Lookup disabled and no cached name"
         stats["lookups_completed"] = len(gst_names_cache)
 
     # 3. Validation Check
     logger.info(f"[{file_type.upper()}] Validating invoices against accounting rules...")
     name_warnings: List[Dict[str, Any]] = []
-    valid_records, validation_errors = validate_records(records, gst_names_cache, name_warnings)
+    valid_records, validation_errors = validate_records(records, gst_names_cache, name_warnings, lookup_failures)
     
     if not settings.get("enableValidation", True):
         logger.warning(f"[{file_type.upper()}] Validation filter disabled. Mapping all rows.")
@@ -169,9 +171,7 @@ def convert_single_file(
     stats["valid_invoices"] = len(valid_records)
     stats["invalid_invoices"] = len(validation_errors)
     stats["validation_errors_count"] = len(all_errors)
-    stats["lookup_failures_count"] = sum(
-        1 for err in all_errors if "lookup failed" in err.get("error", "").lower()
-    )
+    stats["lookup_failures_count"] = len(name_warnings)
 
     if reconcile_records(records, valid_records, all_errors):
         logger.error(f"[{file_type.upper()}] Some source rows were not accounted for; see log above.")

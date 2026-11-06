@@ -2,6 +2,7 @@ import re
 import os
 import json
 import asyncio
+import time
 import logging
 from playwright.async_api import async_playwright
 
@@ -93,9 +94,15 @@ def clean_company_name(name):
             cleaned_words.append(word.capitalize())
     return " ".join(cleaned_words)
 
-async def _scrape_gstzen_batch(gstins):
-    """Internal async function to scrape GSTIN names from GSTzen using Playwright."""
+async def _scrape_gstzen_batch(gstins, reasons=None):
+    """
+    Internal async function to scrape GSTIN names from GSTzen using Playwright.
+    Partial results are always returned (an error mid-way does not discard names already read).
+    `reasons` (optional dict) is filled with {GSTIN: failure reason} for unresolved GSTINs.
+    """
     results = {}
+    if reasons is None:
+        reasons = {}
     if not gstins:
         return results
 
@@ -108,104 +115,126 @@ async def _scrape_gstzen_batch(gstins):
             user_agent="Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/122.0.0.0 Safari/537.36"
         )
         page = await context.new_page()
-        
+
         try:
             logger.info("Navigating to GSTzen validator page...")
             await page.goto("https://my.gstzen.in/p/gstin-validator/home/free/", timeout=30000)
-            
+
             await page.wait_for_selector("#gstin-input", timeout=15000)
-            # Fill GSTIN in the textarea
             await page.fill("#gstin-input", gstin_list_str)
-            
-            # Click the Validate button
+
             btn = await page.wait_for_selector("button:has-text('Validate')", timeout=15000)
             logger.info("Submitting the GSTIN validation request...")
             await btn.click()
-            
-            # Wait for the results table to render
+
             logger.info("Waiting for results table to load...")
             await page.wait_for_selector("table", timeout=30000)
-            
-            # Parse rows from the results table
+
             rows = await page.query_selector_all("table tr")
             for row in rows:
-                cols = await row.query_selector_all("td")
-                if not cols or len(cols) < 2:
-                    continue  # Skip header row or incomplete rows
-                
-                gstin_val = (await cols[0].inner_text()).strip().upper()
-                legal_name_val = (await cols[1].inner_text()).strip()
-                valid_status = (await cols[2].inner_text()).strip().lower()
-                
-                if gstin_val in gstins:
-                    if valid_status == "yes" and legal_name_val:
-                        cleaned_name = clean_company_name(legal_name_val)
-                        results[gstin_val] = cleaned_name
-                        logger.info(f"Resolved: {gstin_val} -> {cleaned_name}")
-                    else:
-                        logger.warning(f"GSTIN {gstin_val} is reported as invalid or has empty name on GSTzen.")
-        
+                try:
+                    cols = await row.query_selector_all("td")
+                    if not cols or len(cols) < 3:
+                        continue  # header row or incomplete row
+                    gstin_val = (await cols[0].inner_text()).strip().upper()
+                    legal_name_val = (await cols[1].inner_text()).strip()
+                    valid_status = (await cols[2].inner_text()).strip().lower()
+                except Exception as row_err:
+                    logger.warning(f"Could not read a GSTzen result row: {row_err}")
+                    continue
+
+                if gstin_val not in gstins:
+                    continue
+                if valid_status == "yes" and legal_name_val:
+                    cleaned_name = clean_company_name(legal_name_val)
+                    results[gstin_val] = cleaned_name
+                    logger.info(f"Resolved: {gstin_val} -> {cleaned_name}")
+                elif valid_status == "yes":
+                    reasons[gstin_val] = "GSTzen returned an empty legal name (incomplete response)"
+                    logger.warning(f"GSTIN {gstin_val}: GSTzen returned an empty name.")
+                else:
+                    reasons[gstin_val] = f"GSTzen reports GSTIN as not valid/active (status '{valid_status}')"
+                    logger.warning(f"GSTIN {gstin_val} is reported as invalid on GSTzen.")
+
         except Exception as e:
-            logger.error(f"Error during GSTzen scraping: {e}")
+            logger.error(f"Error during GSTzen scraping: {type(e).__name__}: {e}")
+            for g in gstins:
+                if g not in results and g not in reasons:
+                    reasons[g] = f"GSTzen request failed ({type(e).__name__}: {e})"
         finally:
             await browser.close()
-            
+
     return results
 
-def lookup_gstin_batch(gstins, max_retries=2):
+def lookup_gstin_batch(gstins, max_retries=2, failures=None, backoff_seconds=2.0):
     """
     Look up a list of GSTINs. Check cache first, then query GSTzen for missing ones.
-    Retries failed/unresolved lookups up to `max_retries` times before giving up.
+    Unresolved GSTINs are retried up to `max_retries` more times (so 3 attempts by default)
+    with exponential backoff between attempts. Only successfully resolved, non-blank names
+    are cached, and cached blanks are ignored.
+
+    `failures` (optional dict) is filled with {GSTIN: reason} for every GSTIN that could
+    not be resolved, so callers can report it instead of silently dropping it.
     Returns a dictionary of {GSTIN: Legal Name}.
     """
-    # Normalize input
+    if failures is None:
+        failures = {}
     gstins = [g.strip().upper() for g in gstins if g and isinstance(g, str)]
     if not gstins:
         return {}
 
-    # Load cache
     cache = load_cache()
-
     results = {}
     missing_gstins = []
 
-    # 1. Check cache and validate format
-    for gstin in gstins:
+    for gstin in dict.fromkeys(gstins):  # de-duplicate, keep order
         if not is_valid_gstin(gstin):
             logger.warning(f"Skipping lookup for invalid GSTIN format: {gstin}")
+            failures[gstin] = "Invalid GSTIN format; lookup not attempted"
             continue
-
-        if gstin in cache:
-            results[gstin] = cache[gstin]
+        cached_name = normalize_party_name(cache.get(gstin))
+        if cached_name:
+            results[gstin] = cached_name
         else:
             missing_gstins.append(gstin)
 
-    # 2. Query missing GSTINs in batch, retrying whatever remains unresolved
-    missing_gstins = list(set(missing_gstins))
     attempt = 0
+    reasons = {}
+    new_names = False
     while missing_gstins and attempt <= max_retries:
         attempt += 1
-        logger.info(f"Cache miss. Querying {len(missing_gstins)} GSTINs from GSTzen (attempt {attempt}/{max_retries + 1})...")
+        if attempt > 1:
+            delay = backoff_seconds * (2 ** (attempt - 2))
+            logger.info(f"Waiting {delay:.1f}s before retry...")
+            time.sleep(delay)
+        logger.info(f"Querying {len(missing_gstins)} GSTINs from GSTzen (attempt {attempt}/{max_retries + 1})...")
 
+        reasons = {}
         try:
-            scraped_results = asyncio.run(_scrape_gstzen_batch(missing_gstins))
+            scraped_results = asyncio.run(_scrape_gstzen_batch(missing_gstins, reasons))
         except Exception as e:
-            logger.error(f"Lookup attempt {attempt} failed entirely: {e}")
+            logger.error(f"Lookup attempt {attempt} failed entirely: {type(e).__name__}: {e}")
             scraped_results = {}
+            reasons = {g: f"Lookup attempt failed ({type(e).__name__}: {e})" for g in missing_gstins}
 
         for gstin, name in scraped_results.items():
+            name = normalize_party_name(name)
+            if not name:
+                continue
             results[gstin] = name
             cache[gstin] = name
+            new_names = True
 
-        missing_gstins = [g for g in missing_gstins if g not in scraped_results]
-
+        missing_gstins = [g for g in missing_gstins if g not in results]
         if missing_gstins and attempt <= max_retries:
-            logger.warning(f"{len(missing_gstins)} GSTINs still unresolved, will retry: {missing_gstins}")
+            logger.warning(f"{len(missing_gstins)} GSTINs still unresolved after attempt {attempt}, will retry: {missing_gstins}")
 
+    for g in missing_gstins:
+        failures[g] = f"{reasons.get(g, 'No name returned by GSTzen')} (after {attempt} attempts)"
     if missing_gstins:
         logger.error(f"Giving up on {len(missing_gstins)} GSTINs after {attempt} attempts: {missing_gstins}")
 
-    if cache:
+    if new_names:
         save_cache(cache)
 
     return results
