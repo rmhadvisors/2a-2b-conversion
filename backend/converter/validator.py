@@ -25,18 +25,18 @@ def fallback_party_name(gstin):
 def resolve_party_name(rec, source_names, gst_names_cache):
     """
     Resolves a record's party name by priority:
-      1. 'Trade/Legal name of the Supplier' from the input file (row, then any row of that GSTIN)
-      2/3. GSTIN cache / GSTzen result (both arrive via gst_names_cache)
-      4. Fallback placeholder (caller reports a warning)
-    Returns (name, source) where source is 'input', 'lookup' or 'fallback'.
+      1. Business name from GSTzen / GSTIN cache (arrives via gst_names_cache)
+      2. 'Trade/Legal name of the Supplier' from the input file (row, then any row of that GSTIN)
+      3. Fallback placeholder (caller reports a warning)
+    Returns (name, source) where source is 'lookup', 'input' or 'fallback'.
     """
     gstin = (rec.get("gstin") or "").strip().upper()
-    name = normalize_party_name(rec.get("supplier_name_2a")) or source_names.get(gstin, "")
-    if name:
-        return name, "input"
     name = normalize_party_name(gst_names_cache.get(rec.get("gstin")) or gst_names_cache.get(gstin))
     if name:
         return name, "lookup"
+    name = normalize_party_name(rec.get("supplier_name_2a")) or source_names.get(gstin, "")
+    if name:
+        return name, "input"
     return fallback_party_name(gstin), "fallback"
 
 def validate_records(records, gst_names_cache, warnings=None, lookup_failures=None):
@@ -54,6 +54,7 @@ def validate_records(records, gst_names_cache, warnings=None, lookup_failures=No
     lookup_failures = lookup_failures or {}
     source_names = source_names_by_gstin(records)
     duplicate_keys = find_duplicate_invoices(records)
+    reported_gstins = set()
 
     for rec in records:
         row_num = rec["excel_row_num"]
@@ -62,9 +63,9 @@ def validate_records(records, gst_names_cache, warnings=None, lookup_failures=No
         
         row_errors = []
         # Best-known party name, kept for the Errors sheet (never blank out a valid name)
-        known_name = (normalize_party_name(rec.get("supplier_name_2a"))
-                      or source_names.get((gstin or "").strip().upper(), "")
-                      or normalize_party_name(gst_names_cache.get(gstin) or gst_names_cache.get((gstin or "").strip().upper())))
+        known_name = (normalize_party_name(gst_names_cache.get(gstin) or gst_names_cache.get((gstin or "").strip().upper()))
+                      or normalize_party_name(rec.get("supplier_name_2a"))
+                      or source_names.get((gstin or "").strip().upper(), ""))
         
         # 1. Validate GSTIN
         if not gstin:
@@ -130,21 +131,24 @@ def validate_records(records, gst_names_cache, warnings=None, lookup_failures=No
             if abs(sgst - expected_half_tax) > max(1.0, expected_half_tax * 0.02):
                 row_errors.append(f"SGST {sgst} does not match expected {expected_half_tax:.2f} for taxable value {taxable_value} @ {rate}%")
 
-        # 6. Resolve the party name (input file first, then cache/GSTzen, then fallback).
+        # 6. Resolve the party name (cache/GSTzen first, then input file, then fallback).
         # An unresolved name is a warning, not a reason to drop the invoice.
         if is_valid_gstin(gstin):
             party_name, name_source = resolve_party_name(rec, source_names, gst_names_cache)
             rec["party_name"] = party_name
             rec["party_name_source"] = name_source
-            if name_source == "fallback" and warnings is not None:
+            if name_source != "lookup" and warnings is not None and gstin.strip().upper() not in reported_gstins:
+                # GSTzen/cache gave no trade name: report the GSTIN once, with the name that was used instead.
+                reported_gstins.add(gstin.strip().upper())
                 reason = lookup_failures.get(gstin.strip().upper())
                 detail = f" Lookup failure: {reason}." if reason else ""
+                used = "the supplier name from the input file" if name_source == "input" else "a fallback name"
                 warnings.append({
                     "row": row_num,
                     "invoice": inv_num if inv_num else "BLANK",
                     "gstin": gstin,
-                    "party_name": "",
-                    "error": f"Party name could not be resolved from the input file, cache or GSTzen; using fallback '{party_name}'.{detail}"
+                    "party_name": party_name,
+                    "error": f"Party name could not be resolved from GSTzen (trade name not found); using {used}: '{party_name}'.{detail}"
                 })
 
         # Handle validation output

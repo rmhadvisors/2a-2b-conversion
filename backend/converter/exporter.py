@@ -27,7 +27,7 @@ SUGGESTED_FIXES = {
     "duplicate invoice detected": "Check the source file for a duplicated row and remove it if erroneous.",
     "does not match expected": "Recheck CGST/SGST against the taxable value and rate for calculation errors.",
     "inter-state transaction": "Tally template has no IGST columns; this row was skipped from Sheet1.",
-    "party name could not be resolved": "Invoice was converted under a fallback name; rename the ledger in Tally or fix the supplier name in the source file.",
+    "party name could not be resolved": "GSTzen had no trade name for this GSTIN; the invoice was converted under the name shown. Rename the ledger in Tally if the trade name differs.",
     "gstin lookup failed": "Verify the GSTIN is registered and retry the lookup.",
 }
 

@@ -44,7 +44,7 @@ def normalize_party_name(name):
     if name is None:
         return ""
     cleaned = " ".join(str(name).split())
-    if cleaned.lower() in ("nan", "none", "null", "-", "--", "n/a", "na"):
+    if cleaned.lower() in ("nan", "none", "null", "-", "--", "n/a", "na", "read on lookup"):
         return ""
     return cleaned
 
@@ -63,13 +63,13 @@ def source_names_by_gstin(records):
 
 def gstins_needing_lookup(records):
     """
-    GSTINs that have a valid format but no supplier name in the source file,
-    i.e. the only ones worth sending to the cache / GSTzen.
+    All valid-format GSTINs. The business name from GSTzen (or the cache) takes
+    priority over the name printed in the GSTR file, so every GSTIN is looked up;
+    the file name is only the fallback when the lookup fails.
     """
-    source_names = source_names_by_gstin(records)
     needed = []
     for gstin in dict.fromkeys(r["gstin"] for r in records if r.get("gstin")):
-        if is_valid_gstin(gstin) and gstin.strip().upper() not in source_names:
+        if is_valid_gstin(gstin):
             needed.append(gstin)
     return needed
 
@@ -123,12 +123,12 @@ async def _scrape_gstzen_batch(gstins, reasons=None):
             await page.wait_for_selector("#gstin-input", timeout=15000)
             await page.fill("#gstin-input", gstin_list_str)
 
-            btn = await page.wait_for_selector("button:has-text('Validate')", timeout=15000)
+            btn = await page.wait_for_selector("button:has-text('Look up')", timeout=15000)
             logger.info("Submitting the GSTIN validation request...")
             await btn.click()
 
             logger.info("Waiting for results table to load...")
-            await page.wait_for_selector("table", timeout=30000)
+            await page.wait_for_selector("table td", timeout=30000)
 
             rows = await page.query_selector_all("table tr")
             for row in rows:
@@ -145,11 +145,11 @@ async def _scrape_gstzen_batch(gstins, reasons=None):
 
                 if gstin_val not in gstins:
                     continue
-                if valid_status == "yes" and legal_name_val:
+                if valid_status.endswith("valid") and not valid_status.startswith("in") and legal_name_val:
                     cleaned_name = clean_company_name(legal_name_val)
                     results[gstin_val] = cleaned_name
                     logger.info(f"Resolved: {gstin_val} -> {cleaned_name}")
-                elif valid_status == "yes":
+                elif valid_status.endswith("valid") and not valid_status.startswith("in"):
                     reasons[gstin_val] = "GSTzen returned an empty legal name (incomplete response)"
                     logger.warning(f"GSTIN {gstin_val}: GSTzen returned an empty name.")
                 else:
