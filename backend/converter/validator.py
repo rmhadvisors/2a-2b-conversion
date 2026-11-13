@@ -91,8 +91,8 @@ def validate_records(records, gst_names_cache, warnings=None, lookup_failures=No
         rate = rec.get("rate")
         if not isinstance(rate, (int, float)):
             row_errors.append(f"GST Rate must be numeric, got: '{rate}'")
-        elif int(rate) not in [0, 5, 12, 18, 28]:
-            row_errors.append(f"GST Rate {rate}% is not supported by Tally template (supported: 0, 5, 12, 18, 28)")
+        elif int(rate) not in [0, 3, 5, 12, 18, 28]:
+            row_errors.append(f"GST Rate {rate}% is not supported by Tally template (supported: 0, 3, 5, 12, 18, 28)")
 
         # 5. Validate Taxable Value and Tax Amounts are numeric
         taxable_value = rec["taxable_value"]

@@ -9,6 +9,7 @@ IGST_COLUMNS = {
     12: (23, 24),
     18: (25, 26),
     28: (27, 28),
+    3: (32, 33),
 }
 
 def map_records(valid_records):
@@ -46,7 +47,7 @@ def map_records(valid_records):
             row[6] = rec["rate"]                     # GST RATE
             
             # Initialize all value columns to 0.0 or 0
-            for col_idx in range(7, 29):
+            for col_idx in range(7, 34):
                 row[col_idx] = 0.0
 
             # Populate rate-specific columns based on the rate
@@ -69,6 +70,15 @@ def map_records(valid_records):
                     row[8] = taxable                  # Purchase GST @ 5%
                     row[9] = cgst                     # Input Cgst @ 2.5%
                     row[10] = sgst                    # Input Sgst @ 2.5%
+            elif rate == 3:
+                if is_interstate:
+                    p_idx, i_idx = IGST_COLUMNS[3]
+                    row[p_idx] = taxable              # Purchase IGST @ 3%
+                    row[i_idx] = igst                 # Input IGST @ 3%
+                else:
+                    row[29] = taxable                 # Purchase GST @ 3%
+                    row[30] = cgst                    # Input Cgst @ 1.5%
+                    row[31] = sgst                    # Input Sgst @ 1.5%
             elif rate == 12:
                 if is_interstate:
                     p_idx, i_idx = IGST_COLUMNS[12]

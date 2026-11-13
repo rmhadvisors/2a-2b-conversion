@@ -6,6 +6,90 @@ from datetime import datetime
 
 logger = logging.getLogger("converter.parser")
 
+def _fmt_date(val):
+    if pd.isna(val):
+        return ""
+    if isinstance(val, (datetime, pd.Timestamp)):
+        return val.strftime("%d-%m-%Y")
+    s = str(val).strip()
+    for fmt in ("%d-%m-%Y", "%d-%b-%y", "%d-%B-%Y", "%Y-%m-%d", "%d/%m/%Y"):
+        try:
+            return datetime.strptime(s, fmt).strftime("%d-%m-%Y")
+        except ValueError:
+            continue
+    return s
+
+
+def _num(val):
+    if pd.isna(val):
+        return 0.0
+    s = str(val).strip().replace(",", "")
+    if s in ("", "-"):
+        return 0.0
+    try:
+        return float(s)
+    except ValueError:
+        return str(val)
+
+
+def _parse_flat_b2b(df):
+    """
+    Parses the flat export layout: a single header row (row 1) with named
+    columns such as 'GSTIN/UIN', 'Invoice No', 'Taxable Value', 'IGST', ...
+    """
+    records, errors = [], []
+    df = df.copy()
+    df.columns = [str(c).strip().lower() for c in df.columns]
+
+    def col(row, *names):
+        for n in names:
+            if n in row.index:
+                return row[n]
+        return None
+
+    for idx, row in df.iterrows():
+        excel_row_num = idx + 2  # header is row 1
+        if row.isna().all():
+            continue
+        gstin_raw = col(row, "gstin/uin", "gstin of supplier", "gstin")
+        inv_raw = col(row, "invoice no", "invoice number", "invoice no.")
+        gstin = str(gstin_raw).strip().upper() if pd.notna(gstin_raw) else ""
+        inv_num = str(inv_raw).strip() if pd.notna(inv_raw) else ""
+        if not gstin and not inv_num:
+            errors.append({
+                "row": excel_row_num, "invoice": "BLANK", "gstin": "BLANK",
+                "party_name": "",
+                "error": "GSTIN and Invoice Number are both blank but the row contains other data; row not converted",
+            })
+            continue
+        if inv_num.lower().endswith("-total"):
+            continue
+        name = col(row, "supplier name", "trade/legal name of the supplier")
+        rate = _num(col(row, "rate", "rate (%)"))
+        rr = col(row, "reverse charge")
+        pos = col(row, "place of supply")
+        itype = col(row, "invoice type")
+        records.append({
+            "excel_row_num": excel_row_num,
+            "gstin": gstin,
+            "supplier_name_2a": str(name).strip() if pd.notna(name) else "",
+            "invoice_num": inv_num,
+            "invoice_type": str(itype).strip() if pd.notna(itype) else "",
+            "invoice_date": _fmt_date(col(row, "invoice date")),
+            "invoice_value": _num(col(row, "invoice value")),
+            "place_of_supply": str(pos).strip() if pd.notna(pos) else "",
+            "reverse_charge": str(rr).strip() if pd.notna(rr) else "N",
+            "rate": int(rate) if isinstance(rate, float) else rate,
+            "taxable_value": _num(col(row, "taxable value")),
+            "igst": _num(col(row, "igst", "integrated tax")),
+            "cgst": _num(col(row, "cgst", "central tax")),
+            "sgst": _num(col(row, "sgst", "state/ut tax")),
+            "cess": _num(col(row, "cess")),
+        })
+    logger.info(f"Finished parsing flat layout. Extracted {len(records)} rows.")
+    return records, errors
+
+
 def parse_gstr2a_b2b(file_path):
     """
     Parses the B2B sheet of a GSTR-2A Excel file.
@@ -13,11 +97,16 @@ def parse_gstr2a_b2b(file_path):
     """
     records = []
     parsing_errors = []
-    
+
     logger.info(f"Loading GSTR-2A workbook from {file_path}...")
     try:
         # Load the sheet without a header to parse starting row and headers manually
         xl = pd.ExcelFile(file_path)
+        if "B2B" not in xl.sheet_names:
+            flat = next((s for s in xl.sheet_names if s.strip().lower() in ("b2b_data", "b2b data")), None)
+            if flat:
+                logger.info(f"Using flat-layout sheet '{flat}'")
+                return _parse_flat_b2b(pd.read_excel(xl, sheet_name=flat, header=0))
         if "B2B" not in xl.sheet_names:
             raise ValueError(f"Sheet 'B2B' not found in GSTR-2A file. Available sheets: {xl.sheet_names}")
             

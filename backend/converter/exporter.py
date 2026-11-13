@@ -21,7 +21,7 @@ SUGGESTED_FIXES = {
     "invoice date is blank": "Enter the invoice date in DD-MM-YYYY format.",
     "invalid invoice date format": "Re-enter the date as DD-MM-YYYY.",
     "gst rate must be numeric": "Correct the GST rate cell to a plain number.",
-    "is not supported by tally template": "Verify the rate against the source invoice; only 0/5/12/18/28% are supported.",
+    "is not supported by tally template": "Verify the rate against the source invoice; only 0/3/5/12/18/28% are supported.",
     "taxable value must be numeric": "Correct the taxable value cell to a plain number.",
     "taxable value is negative": "Confirm whether this is a valid credit note; otherwise correct the value.",
     "duplicate invoice detected": "Check the source file for a duplicated row and remove it if erroneous.",
@@ -100,6 +100,22 @@ def export_to_excel(mapped_rows, errors, template_path, output_path):
         ws.column_dimensions[openpyxl.utils.get_column_letter(p_col)].width = ref_width
         ws.column_dimensions[openpyxl.utils.get_column_letter(i_col)].width = ref_width
 
+    # Add the 3% slab: Purchase GST @ 3% / Input Cgst @ 1.5% / Input Sgst @ 1.5% (cols 30-32)
+    # plus its IGST pair (cols 33-34), styled like the existing slab columns.
+    for col, title, hdr_ref in [
+        (30, "Purchase GST @ 3%", purchase_header_ref),
+        (31, "Input Cgst @ 1.5%", input_header_ref),
+        (32, "Input Sgst @ 1.5%", input_header_ref),
+        (33, "Purchase IGST @ 3%", purchase_header_ref),
+        (34, "Input IGST @ 3%", input_header_ref),
+    ]:
+        h = ws.cell(row=1, column=col, value=title)
+        h.font = copy(hdr_ref.font)
+        h.fill = copy(hdr_ref.fill)
+        h.border = copy(hdr_ref.border)
+        h.alignment = copy(hdr_ref.alignment)
+        ws.column_dimensions[openpyxl.utils.get_column_letter(col)].width = ref_width
+
     # Cache the styles of row 2 (the first data row) to apply to all newly added rows
     logger.info("Caching styling from first data row...")
     style_cache = {}
@@ -115,7 +131,7 @@ def export_to_excel(mapped_rows, errors, template_path, output_path):
 
     # Override the new IGST data-column styles to match their reference columns
     # (the blank template columns don't carry the accounting number format).
-    for p_col, i_col in [(22, 23), (24, 25), (26, 27), (28, 29)]:
+    for p_col, i_col in [(22, 23), (24, 25), (26, 27), (28, 29), (30, 31), (33, 34)]:
         style_cache[p_col] = {
             "font": copy(purchase_data_ref.font),
             "fill": copy(purchase_data_ref.fill),
@@ -130,6 +146,8 @@ def export_to_excel(mapped_rows, errors, template_path, output_path):
             "alignment": copy(input_data_ref.alignment),
             "number_format": input_data_ref.number_format
         }
+
+    style_cache[32] = dict(style_cache[31])  # Input Sgst @ 1.5%
 
     # Clear existing data rows (from row 2 onwards)
     max_row = ws.max_row
