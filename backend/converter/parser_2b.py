@@ -5,7 +5,7 @@ from datetime import datetime
 
 logger = logging.getLogger("converter.parser_2b")
 
-VALID_RATES = [0, 5, 12, 18, 28]
+VALID_RATES = [0, 3, 5, 12, 18, 28]
 
 # Keywords used to locate each column by its header text (case-insensitive substring match).
 # GSTR-2B exports vary in column offset (some have an extra leading flag column) and in
