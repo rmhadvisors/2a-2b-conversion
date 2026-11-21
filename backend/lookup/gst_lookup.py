@@ -4,6 +4,9 @@ import json
 import asyncio
 import time
 import logging
+import uuid
+import urllib.request
+import urllib.error
 from playwright.async_api import async_playwright
 
 # Setup logging for this module
@@ -166,6 +169,83 @@ async def _scrape_gstzen_batch(gstins, reasons=None):
 
     return results
 
+def _load_env_file():
+    """Load backend/.env into os.environ (existing environment variables win)."""
+    env_path = os.path.join(os.path.dirname(os.path.dirname(__file__)), ".env")
+    if not os.path.exists(env_path):
+        return
+    try:
+        with open(env_path, "r", encoding="utf-8") as f:
+            for line in f:
+                line = line.strip()
+                if not line or line.startswith("#") or "=" not in line:
+                    continue
+                key, _, val = line.partition("=")
+                os.environ.setdefault(key.strip(), val.strip().strip('"').strip("'"))
+    except Exception as e:
+        logger.warning(f"Could not read .env: {e}")
+
+
+def _api_lookup_one(gstin, cfg):
+    """Call the fallback GST API for one GSTIN. Returns (name, reason)."""
+    body = {
+        "request_id": uuid.uuid4().hex,
+        "consent": "Y",
+        "consent_text": "I hereby declare my consent agreement for fetching my information via RPACPC API",
+        "gstNumber": gstin,
+        "hsnDetails": False,
+        "branchDetails": False,
+        "filingDetails": False,
+        "filingFrequency": False,
+        "liabilityPaidDetails": False,
+    }
+    headers = {
+        "Content-Type": "application/json",
+        cfg["token_header"]: cfg["token"],
+        cfg["secret_header"]: cfg["secret"],
+    }
+    req = urllib.request.Request(cfg["url"], data=json.dumps(body).encode("utf-8"),
+                                 headers=headers, method="POST")
+    try:
+        with urllib.request.urlopen(req, timeout=30) as resp:
+            payload = json.loads(resp.read().decode("utf-8"))
+    except urllib.error.HTTPError as e:
+        return "", f"API HTTP {e.code}"
+    except Exception as e:
+        return "", f"API request failed ({type(e).__name__})"
+
+    if str(payload.get("status", "")).upper() != "SUCCESS":
+        return "", f"API status '{payload.get('status')}': {payload.get('message')}"
+    basic = (payload.get("data") or {}).get("basicDetails") or {}
+    name = normalize_party_name(basic.get("tradeNam")) or normalize_party_name(basic.get("Legal_Name"))
+    if not name:
+        return "", "API returned no trade/legal name"
+    return name, ""
+
+
+def _api_lookup_batch(gstins, reasons):
+    """Fallback lookup for GSTINs GSTzen could not resolve. Returns {GSTIN: name}."""
+    _load_env_file()
+    cfg = {
+        "url": os.environ.get("GST_API_BASE_URL", ""),
+        "token": os.environ.get("GST_API_TOKEN", ""),
+        "secret": os.environ.get("GST_API_SECRET", ""),
+        "token_header": os.environ.get("GST_API_TOKEN_HEADER", ""),
+        "secret_header": os.environ.get("GST_API_SECRET_HEADER", ""),
+    }
+    if not all(cfg.values()):
+        logger.warning("GST API fallback not configured (check backend/.env); skipping.")
+        return {}
+    results = {}
+    for gstin in gstins:
+        name, reason = _api_lookup_one(gstin, cfg)
+        if name:
+            results[gstin] = name
+        else:
+            reasons[gstin] = f"GSTzen failed; {reason}"
+            logger.warning(f"API fallback failed for {gstin}: {reason}")
+    return results
+
 def lookup_gstin_batch(gstins, max_retries=2, failures=None, backoff_seconds=2.0):
     """
     Look up a list of GSTINs. Check cache first, then query GSTzen for missing ones.
@@ -228,6 +308,15 @@ def lookup_gstin_batch(gstins, max_retries=2, failures=None, backoff_seconds=2.0
         missing_gstins = [g for g in missing_gstins if g not in results]
         if missing_gstins and attempt <= max_retries:
             logger.warning(f"{len(missing_gstins)} GSTINs still unresolved after attempt {attempt}, will retry: {missing_gstins}")
+
+    if missing_gstins:
+        logger.info(f"Trying API fallback for {len(missing_gstins)} GSTINs GSTzen could not resolve...")
+        api_results = _api_lookup_batch(missing_gstins, reasons)
+        for gstin, name in api_results.items():
+            results[gstin] = name
+            cache[gstin] = name
+            new_names = True
+        missing_gstins = [g for g in missing_gstins if g not in results]
 
     for g in missing_gstins:
         failures[g] = f"{reasons.get(g, 'No name returned by GSTzen')} (after {attempt} attempts)"

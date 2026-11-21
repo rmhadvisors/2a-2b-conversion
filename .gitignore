@@ -17,3 +17,7 @@ backend/output/*
 .DS_Store
 
 *.lnk
+
+# Secrets
+.env
+backend/.env
